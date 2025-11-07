@@ -65,20 +65,19 @@ FTP_HOST = "ftp-amobeleza.millenniumhosting.com.br"
 FTP_USER = "amobeleza"
 FTP_PASS = "1wlapt22kjh5"
 
-# Caminho local onde os arquivos .zip estão armazenados
-#CAMINHO_PADRAO = r"C:\Sys\PROJETOS\xml-ftp-to-millennium\files"
-#CAMINHO_PADRAO_TO_SEND = r"C:\Sys\PROJETOS\xml-ftp-to-millennium\to_send"
-#CAMINHO_PADRAO_SEND = r"C:\Sys\PROJETOS\xml-ftp-to-millennium\send"
+# Caminhos locais
 CAMINHO_PADRAO = r"C:\Sys\PROJETOS\xml-ftp-to-millennium\files"
-CAMINHO_PADRAO_TO_SEND = r"C:\Sys\PROJETOS\xml-ftp-to-millennium\to_send"
-CAMINHO_PADRAO_SEND = r"C:\Sys\PROJETOS\xml-ftp-to-millennium\send"
-
+CAMINHO_PADRAO_TO_SEND = r"C:\Sys\PROJETOS\xml-ftp-to-millennium\enviar"
+CAMINHO_PADRAO_SEND = r"C:\Sys\PROJETOS\xml-ftp-to-millennium\enviados"
 
 # Caminho remoto (no servidor FTP) para onde os XMLs serão enviados
 DESTINO_REMOTO = "/XML/CTE"
 
 # Número total de ciclos para tentar reenviar arquivos que falharam
 MAX_REPROCESSOS = 3
+
+# Reconnect automático após N envios (altere para 50, 100, etc.)
+RECONNECT_INTERVAL = 100
 
 # Caminho do log textual de envios (com timestamp para cada execução)
 RELATORIO_TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -98,14 +97,6 @@ MODOS_TRANSFERENCIA = [
 def verificar_arquivo_remoto(ftp, nome_arquivo):
     """
     Consulta se um arquivo já existe no FTP e devolve o tamanho remoto.
-
-    Args:
-        ftp: Conexão ativa com o servidor FTPS.
-        nome_arquivo: Nome do arquivo que deve existir no diretório atual do FTP.
-
-    Returns:
-        O tamanho remoto em bytes quando disponível ou `None` quando o arquivo
-        não está presente ou o servidor não consegue informar o tamanho.
     """
     if ftp is None:
         return None
@@ -115,7 +106,6 @@ def verificar_arquivo_remoto(ftp, nome_arquivo):
         if tamanho is not None:
             return int(tamanho)
     except error_perm:
-        # Servidor pode não suportar SIZE ou o arquivo não existe.
         pass
     except Exception:
         pass
@@ -137,17 +127,9 @@ def verificar_arquivo_remoto(ftp, nome_arquivo):
 def conectar_ftp():
     """
     Abre uma conexão FTPS pronta para enviar arquivos.
-
-    A função cuida de configurar TLS, autenticação, modo passivo e da criação
-    do diretório remoto configurado caso ainda não exista.
-
-    Returns:
-        Uma instância de `FTPSClient` pronta para uso ou `None` se não for
-        possível estabelecer a conexão.
     """
     print("🌐 Tentando conectar ao servidor FTP seguro (FTPS - TLS Explícito)...")
     try:
-        # Criando conexão segura
         ftp = FTPSClient(timeout=60)
         ftp.encoding = "utf-8"
 
@@ -162,12 +144,12 @@ def conectar_ftp():
         ftp.sendcmd("PBSZ 0")
 
         print("🔒 Configurando conexão segura...")
-        ftp.prot_p()                 # Protege o canal de dados (requerido por muitos servidores)
-        ftp.set_pasv(True)           # Usa modo passivo, mais estável atrás de NAT/firewall
-        ftp.voidcmd("TYPE I")        # Garante modo binário já na conexão inicial
+        ftp.prot_p()                 # Protege o canal de dados
+        ftp.set_pasv(True)           # Passivo por padrão
+        ftp.voidcmd("TYPE I")        # Binário
         print("✅ Modo passivo seguro ativado")
 
-        # Tenta acessar a pasta remota configurada
+        # Garante diretório remoto
         try:
             ftp.cwd(DESTINO_REMOTO)
             print(f"📁 Diretório remoto alterado para: {DESTINO_REMOTO}")
@@ -191,10 +173,6 @@ def conectar_ftp():
 def criar_diretorios_remotos(ftp, caminho):
     """
     Cria cada nível do caminho remoto informado (caso não exista).
-
-    Args:
-        ftp: Conexão ativa com o servidor FTPS.
-        caminho: Caminho absoluto no servidor (ex.: "/XML/CTE").
     """
     partes = caminho.strip("/").split("/")
     caminho_atual = ""
@@ -204,8 +182,7 @@ def criar_diretorios_remotos(ftp, caminho):
             ftp.mkd(caminho_atual)
             print(f"📂 Pasta criada: {caminho_atual}")
         except error_perm:
-            # Pasta já existe
-            pass
+            pass  # Já existe
 
 
 # ============================================================
@@ -214,12 +191,6 @@ def criar_diretorios_remotos(ftp, caminho):
 def garantir_conexao(ftp):
     """
     Testa se a conexão FTP ainda está ativa e tenta reconectar quando necessário.
-
-    Args:
-        ftp: Conexão existente (pode estar `None`).
-
-    Returns:
-        Uma conexão válida ou `None` quando não foi possível restabelecer o link.
     """
     if ftp is None:
         return conectar_ftp()
@@ -237,13 +208,7 @@ def garantir_conexao(ftp):
 def configurar_transferencia(ftp, protecao, modo_passivo):
     """
     Configura parâmetros de transferência antes de cada envio.
-
-    Args:
-        ftp: Conexão FTPS ativa.
-        protecao: Caracter ("P" ou "C") indicando o nível de proteção TLS.
-        modo_passivo: `True` para modo passivo, `False` para ativo.
     """
-    # A maioria dos servidores FTPS exige PROT P, por isso o mantemos sempre ativo.
     if protecao == "P":
         ftp.prot_p()
 
@@ -253,21 +218,7 @@ def configurar_transferencia(ftp, protecao, modo_passivo):
 def enviar_para_ftp(ftp, caminho_arquivo, nome_remoto, max_tentativas=3):
     """
     Envia um arquivo para o FTP e valida o tamanho remoto antes de concluir.
-
-    Se o envio não confirmar o tamanho esperado, a função tenta novamente
-    alternando configurações de transferência.
-
-    Args:
-        ftp: Conexão FTPS (revalidada internamente a cada tentativa).
-        caminho_arquivo: Caminho local completo do arquivo a ser enviado.
-        nome_remoto: Nome do arquivo no servidor FTP.
-        max_tentativas: Número máximo de tentativas; usa a lista de modos
-            de transferência quando o valor é zero ou negativo.
-
-    Returns:
-        Uma tupla `(ftp, info)`:
-            ftp: Conexão atual (ou `None` se houve falha irrecuperável).
-            info: Dicionário com dados do envio (status, tamanhos, detalhes).
+    Alterna modos de transferência em caso de divergência/falha.
     """
     if not os.path.exists(caminho_arquivo):
         info = {
@@ -282,7 +233,6 @@ def enviar_para_ftp(ftp, caminho_arquivo, nome_remoto, max_tentativas=3):
         print(f"⚠️ Arquivo local não encontrado, pulando: {caminho_arquivo}")
         return ftp, info
 
-    # Obtém o tamanho do arquivo local
     tamanho_local = os.path.getsize(caminho_arquivo)
     print(f"📊 Tamanho do arquivo local: {tamanho_local} bytes")
 
@@ -364,10 +314,6 @@ def enviar_para_ftp(ftp, caminho_arquivo, nome_remoto, max_tentativas=3):
 def gravar_relatorio(relatorio, caminho_log):
     """
     Salva um relatório textual com o resultado das transferências.
-
-    Args:
-        relatorio: Lista de dicionários produzidos por `enviar_para_ftp`.
-        caminho_log: Caminho absoluto do arquivo de log.
     """
     try:
         os.makedirs(os.path.dirname(caminho_log), exist_ok=True)
@@ -407,14 +353,6 @@ def gravar_relatorio(relatorio, caminho_log):
 def extrair_zip_recursivo(caminho_zip, destino):
     """
     Extrai um arquivo ZIP e trata ZIPs internos recursivamente.
-
-    Args:
-        caminho_zip: Caminho do arquivo ZIP que será aberto.
-        destino: Pasta onde o conteúdo será extraído.
-
-    Returns:
-        `True` quando todas as extrações concluíram sem erro ou `False`
-        caso algum ZIP falhe durante o processo.
     """
     try:
         with zipfile.ZipFile(caminho_zip, "r") as zip_ref:
@@ -443,9 +381,6 @@ def extrair_zip_recursivo(caminho_zip, destino):
 def limpar_conteudo_pasta(pasta):
     """
     Remove todos os itens de uma pasta, preservando apenas a pasta raiz.
-
-    Args:
-        pasta: Caminho da pasta a ser esvaziada.
     """
     if not os.path.isdir(pasta):
         return
@@ -464,13 +399,6 @@ def limpar_conteudo_pasta(pasta):
 def coletar_arquivos_xml(pasta_raiz):
     """
     Procura XMLs dentro de uma pasta (incluindo subpastas).
-
-    Args:
-        pasta_raiz: Caminho a ser varrido.
-
-    Returns:
-        Lista ordenada alfabeticamente com dicionários:
-            {"caminho": <caminho completo>, "nome_remoto": <apenas o nome>}
     """
     itens = []
     if not os.path.isdir(pasta_raiz):
@@ -493,10 +421,6 @@ def coletar_arquivos_xml(pasta_raiz):
 def remover_diretorios_vazios(caminho, limite):
     """
     Exclui diretórios vazios a partir de um caminho até uma pasta limite.
-
-    Args:
-        caminho: Pasta inicial que será avaliada e, se estiver vazia, removida.
-        limite: Pasta que serve de limite superior (não é removida).
     """
     caminho_atual = caminho
     limite = os.path.abspath(limite)
@@ -519,15 +443,6 @@ def remover_diretorios_vazios(caminho, limite):
 def mover_para_enviados(caminho_origem, raiz_origem, pasta_destino):
     """
     Move o arquivo enviado para a pasta de arquivos já processados.
-
-    Args:
-        caminho_origem: Caminho completo do arquivo local que foi enviado.
-        raiz_origem: Pasta que representa a raiz da área de envio (usada para
-            manter a estrutura relativa).
-        pasta_destino: Pasta final onde os arquivos enviados são armazenados.
-
-    Returns:
-        Caminho final do arquivo já movido.
     """
     rel_path = os.path.relpath(caminho_origem, raiz_origem)
     destino_final = os.path.join(pasta_destino, rel_path)
@@ -540,13 +455,6 @@ def mover_para_enviados(caminho_origem, raiz_origem, pasta_destino):
 def gerar_destino_sem_conflito(pasta_destino, nome_arquivo):
     """
     Gera um caminho final sem sobrescrever arquivos existentes.
-
-    Args:
-        pasta_destino: Pasta onde o arquivo será salvo.
-        nome_arquivo: Nome desejado para o arquivo.
-
-    Returns:
-        Caminho seguro e exclusivo dentro de `pasta_destino`.
     """
     base, ext = os.path.splitext(nome_arquivo)
     destino = os.path.join(pasta_destino, nome_arquivo)
@@ -561,15 +469,6 @@ def mover_xmls_para_pasta_base(pasta_origem, pasta_destino):
     """
     Move todos os XMLs encontrados em `pasta_origem` (recursivamente)
     para `pasta_destino`, garantindo que fiquem diretamente dentro dela.
-
-    Args:
-        pasta_origem: Pasta onde os XMLs foram extraídos.
-        pasta_destino: Pasta base `to_send` onde os XMLs devem ficar.
-
-    Returns:
-        Uma tupla `(sucesso, total_movidos)`:
-            sucesso: `True` se todos os arquivos foram movidos sem erro.
-            total_movidos: Quantidade de XMLs encontrados.
     """
     itens = coletar_arquivos_xml(pasta_origem)
     sucesso = True
@@ -597,12 +496,6 @@ def mover_xmls_para_pasta_base(pasta_origem, pasta_destino):
 def achatar_pasta_xml(pasta_destino):
     """
     Garante que todos os XMLs dentro de `pasta_destino` estejam na raiz da pasta.
-
-    Args:
-        pasta_destino: Pasta `to_send` onde os arquivos devem ficar sem subpastas.
-
-    Returns:
-        `True` quando todas as subpastas foram tratadas corretamente.
     """
     sucesso_global = True
     for nome in list(os.listdir(pasta_destino)):
@@ -620,9 +513,6 @@ def achatar_pasta_xml(pasta_destino):
 def limpar_arquivos_temporarios(pasta):
     """
     Remove por completo uma pasta temporária (caso utilizada).
-
-    Args:
-        pasta: Diretório que deve ser excluído.
     """
     try:
         import shutil
@@ -643,10 +533,6 @@ def main():
       3️⃣ Limpa `CAMINHO_PADRAO` após extração bem-sucedida.
       4️⃣ Envia os XMLs de `CAMINHO_PADRAO_TO_SEND` para o FTP em lotes de 100 arquivos.
       5️⃣ Move cada arquivo transmitido para `CAMINHO_PADRAO_SEND` e registra o resultado.
-
-    A função também serve como orquestradora: ela decide quando repetir envios,
-    monta o relatório final e garante que, caso a execução seja interrompida, os
-    arquivos já processados permaneçam organizados para uma futura retomada.
     """
     print("\n🚀 Script iniciado!")
     print("====================================================")
@@ -724,6 +610,9 @@ def main():
     relatorio_envios = []
     lote_atual = 1
 
+    # Contador de envios (tentativas realizadas) para reconexão periódica
+    envios_desde_reconexao = 0
+
     while fila:
         lote = []
         while fila and len(lote) < 100:
@@ -735,20 +624,12 @@ def main():
             tentativas_por_arquivo[item["caminho"]] += 1
             tentativa_atual = tentativas_por_arquivo[item["caminho"]]
 
-        #teste de reconexão
-
-            if ftp:
-                try:
-                    ftp.quit()
-                except Exception:
-                    pass
-                ftp = None
-            ftp = conectar_ftp()
-
-        #teste de reconexão
-
+            # === Envio do arquivo ===
             ftp, info_envio = enviar_para_ftp(ftp, item["caminho"], item["nome_remoto"])
             info_envio["tentativas"] = tentativa_atual
+
+            # Incrementa contador de envios (conta tentativas de envio executadas)
+            envios_desde_reconexao += 1
 
             if info_envio["status"] == "sucesso":
                 try:
@@ -782,21 +663,24 @@ def main():
                     print(f"⛔️ Tentativas esgotadas para {item['nome_remoto']}.")
                     relatorio_envios.append(info_envio)
 
+            # === Reconexão periódica baseada em contador ===
+            # Se atingiu o intervalo e ainda há itens para enviar, reconecta.
+            if RECONNECT_INTERVAL > 0 and envios_desde_reconexao >= RECONNECT_INTERVAL and (fila or (lote_atual and len(lote) > 0)):
+                print("🔄 Reconectando ao servidor FTP para evitar timeout/ociosidade...")
+                if ftp:
+                    try:
+                        ftp.quit()
+                    except Exception:
+                        pass
+                    finally:
+                        try:
+                            ftp.close()
+                        except Exception:
+                            pass
+                ftp = conectar_ftp()
+                envios_desde_reconexao = 0  # zera o contador após reconectar
+
         lote_atual += 1
-
-#CONTADOR
-
-#        if lote_atual % 50 == 0 and lote_atual != 0:
-#                print("🔄 Reconectando ao servidor FTP para evitar timeout...")
-#                if ftp:
-#                    try:
-#                        ftp.quit()
-#                    except Exception:
-#                        pass
-#                    ftp = None
-#                ftp = conectar_ftp()
-
-#CONTADOR
 
     if ftp:
         try:

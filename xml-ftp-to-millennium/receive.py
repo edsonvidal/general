@@ -34,9 +34,9 @@ FTP_HOST = os.getenv("FTP_HOST", "ftp-amobeleza.millenniumhosting.com.br")
 FTP_USER = os.getenv("FTP_USER", "amobeleza")
 FTP_PASS = os.getenv("FTP_PASS", "1wlapt22kjh5")  # use variável de ambiente em produção
 
-PASTA_REMOTA_ORIGEM   = "/XML/TESTE"
-PASTA_REMOTA_ENVIADO  = "/XML/TESTE_ENVIADO"
-PASTA_LOCAL_DESTINO   = r"C:\TUDO_NICOLAS\TESTE_EXTRACAO_XML"
+PASTA_REMOTA_ORIGEM   = "/XML/CTE"
+PASTA_REMOTA_ENVIADO  = "/XML/CTES_ENVIADOS"
+PASTA_LOCAL_DESTINO   = r"C:\wts\download_enfe"
 
 ARQUIVOS_POR_LOTE = 100
 SOMENTE_XML       = True
